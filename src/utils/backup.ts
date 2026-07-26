@@ -12,20 +12,27 @@ export async function sendDatabaseBackup(client: Client): Promise<void> {
 
   try {
     const dbPath = join(__dirname, '../../data/db.json');
+    const premiumDbPath = join(__dirname, '../../data/premium.json');
+    
     const dbContent = readFileSync(dbPath, 'utf-8');
-    const db = JSON.parse(dbContent);
+    const premiumDbContent = readFileSync(premiumDbPath, 'utf-8');
+    
+    const premiumDb = JSON.parse(premiumDbContent);
+    const premiumCount = premiumDb.premiumGrants?.length || 0;
 
     const channel = await client.channels.fetch(config.premiumBackupChannel) as TextChannel;
 
-    const attachment = new AttachmentBuilder(Buffer.from(dbContent, 'utf-8'), {
+    const dbAttachment = new AttachmentBuilder(Buffer.from(dbContent, 'utf-8'), {
+      name: `db-backup-${Date.now()}.json`,
+    });
+
+    const premiumAttachment = new AttachmentBuilder(Buffer.from(premiumDbContent, 'utf-8'), {
       name: `premium-backup-${Date.now()}.json`,
     });
 
-    const premiumCount = db.premiumGrants?.length || 0;
-
     await channel.send({
-      content: `**Premium Database Backup**\nTotal grants: ${premiumCount}\nTimestamp: <t:${Math.floor(Date.now() / 1000)}:F>`,
-      files: [attachment],
+      content: `Database Backup\nTotal premium grants: ${premiumCount}\nTimestamp: <t:${Math.floor(Date.now() / 1000)}:F>`,
+      files: [dbAttachment, premiumAttachment],
     });
   } catch (error) {
     console.error('Failed to send database backup:', error);

@@ -1,7 +1,7 @@
-import { Client, GatewayIntentBits, Message, GuildMember, PartialGuildMember, TextChannel } from 'discord.js';
+import { Client, GatewayIntentBits, Message, GuildMember, PartialGuildMember, TextChannel, ChannelType, PermissionFlagsBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, Interaction } from 'discord.js';
 import { config } from './config.js';
 import { commands, ownerCommands, loadAllCommands } from './handler.js';
-import { getHoneypotChannel, addPremiumGrant, removePremiumGrant, getPremiumGrant, PREMIUM_TIERS } from './database.js';
+import { getHoneypotChannel, addPremiumGrant, removePremiumGrant, getPremiumGrant, PREMIUM_TIERS, addTicket, removeTicket, getTicket } from './database.js';
 import { sendPremiumWebhook } from './utils/webhook.js';
 import { sendDatabaseBackup } from './utils/backup.js';
 
@@ -106,6 +106,131 @@ client.on('messageCreate', async (message: Message) => {
   }
 });
 
+client.on('interactionCreate', async (interaction: Interaction) => {
+  if (!interaction.isButton()) return;
+  if (interaction.guildId !== config.guildId) return;
+
+  if (interaction.customId.startsWith('ticket_create_')) {
+    const prefix = interaction.customId.replace('ticket_create_', '');
+    const category = config.tickets.categories.find(c => c.prefix === prefix);
+
+    if (!category) {
+      await interaction.reply({ content: 'Invalid ticket category', ephemeral: true });
+      return;
+    }
+
+    try {
+      const guild = interaction.guild;
+      if (!guild) {
+        await interaction.reply({ content: 'Unable to access guild', ephemeral: true });
+        return;
+      }
+
+      const existingTicket = (await guild.channels.fetch())
+        .filter(ch => ch?.name.startsWith(`${category.prefix}-`) && ch.name.includes(interaction.user.username.toLowerCase()))
+        .first();
+
+      if (existingTicket) {
+        await interaction.reply({
+          content: `You already have an open ticket: <#${existingTicket.id}>`,
+          ephemeral: true
+        });
+        return;
+      }
+
+      await interaction.deferReply({ ephemeral: true });
+
+      const channelName = `${category.prefix}-${interaction.user.username.toLowerCase()}`.replace(/[^a-z0-9-]/g, '');
+
+      const ticketChannel = await guild.channels.create({
+        name: channelName,
+        type: ChannelType.GuildText,
+        parent: config.tickets.categoryId || undefined,
+        permissionOverwrites: [
+          {
+            id: guild.id,
+            deny: [PermissionFlagsBits.ViewChannel],
+          },
+          {
+            id: interaction.user.id,
+            allow: [
+              PermissionFlagsBits.ViewChannel,
+              PermissionFlagsBits.SendMessages,
+              PermissionFlagsBits.ReadMessageHistory,
+              PermissionFlagsBits.AttachFiles,
+              PermissionFlagsBits.EmbedLinks,
+              PermissionFlagsBits.AddReactions,
+              PermissionFlagsBits.UseExternalEmojis,
+            ],
+          },
+        ],
+      });
+
+      addTicket(ticketChannel.id, interaction.user.id, category.prefix);
+
+      const closeButton = new ActionRowBuilder<ButtonBuilder>()
+        .addComponents(
+          new ButtonBuilder()
+            .setCustomId('ticket_close')
+            .setLabel('Close Ticket')
+            .setStyle(ButtonStyle.Danger)
+        );
+
+      await ticketChannel.send({
+        content:
+          `<@${interaction.user.id}>\n\n` +
+          `${category.name}\n\n` +
+          `Welcome! Thank you for creating a ticket. Please describe your ${category.name.toLowerCase()} in detail.\n\n` +
+          `A staff member will assist you shortly.`,
+        components: [closeButton],
+      });
+
+      await interaction.editReply({
+        content: `Ticket created: <#${ticketChannel.id}>`
+      });
+    } catch (error) {
+      console.error('Error creating ticket:', error);
+      if (interaction.deferred) {
+        await interaction.editReply({ content: 'Failed to create ticket. Please try again.' });
+      } else {
+        await interaction.reply({ content: 'Failed to create ticket. Please try again.', ephemeral: true });
+      }
+    }
+  } else if (interaction.customId === 'ticket_close') {
+    const ticket = getTicket(interaction.channelId);
+
+    if (!ticket) {
+      await interaction.reply({ content: 'This is not a ticket channel', ephemeral: true });
+      return;
+    }
+
+    const member = interaction.member as GuildMember;
+    if (!member) {
+      await interaction.reply({ content: 'Unable to verify permissions', ephemeral: true });
+      return;
+    }
+
+
+    if (ticket.userId !== interaction.user.id && !member.roles.cache.has(config.ownerRoleId)) {
+      await interaction.reply({ content: 'Only the ticket owner or staff can close this ticket', ephemeral: true });
+      return;
+    }
+
+    await interaction.reply('Closing ticket in 3 seconds...');
+
+    setTimeout(async () => {
+      try {
+        removeTicket(interaction.channelId);
+        if (interaction.channel && 'delete' in interaction.channel) {
+          await interaction.channel.delete();
+        }
+      } catch (error) {
+        console.error('Error closing ticket:', error);
+      }
+    }, 3000);
+  }
+});
+
 client.on('guildMemberUpdate', async (oldMember: GuildMember | PartialGuildMember, newMember: GuildMember) => {
   if (newMember.guild.id !== config.guildId) return;
 
@@ -124,7 +249,7 @@ client.on('guildMemberUpdate', async (oldMember: GuildMember | PartialGuildMembe
   let newPremiumRoles = newMember.roles.cache.filter(role => premiumRoleIds.includes(role.id));
   const justAddedRoles = newPremiumRoles.filter(role => !oldPremiumRoles.has(role.id));
 
-  // Handle multiple premium roles - keep only the highest tier
+
   if (newPremiumRoles.size > 1) {
     const candidates = justAddedRoles.size > 0 ? justAddedRoles : newPremiumRoles;
     const keepRole = highestTierRole([...candidates.values()]);
@@ -148,7 +273,7 @@ client.on('guildMemberUpdate', async (oldMember: GuildMember | PartialGuildMembe
   const addedRoles = newPremiumRoles.filter(role => !oldPremiumRoles.has(role.id));
   const removedRoles = oldPremiumRoles.filter(role => !newPremiumRoles.has(role.id));
 
-  // Handle role additions - grant premium
+
   if (addedRoles.size > 0) {
     const addedRole = highestTierRole([...addedRoles.values()]);
     if (!addedRole) return;
@@ -169,7 +294,7 @@ client.on('guildMemberUpdate', async (oldMember: GuildMember | PartialGuildMembe
         const channel = await client.channels.fetch(config.premiumLogChannels.grant) as TextChannel;
         const tierInfo = Object.values(PREMIUM_TIERS).find(t => t.id === tier);
         await channel.send(
-          `**Premium Granted**\n` +
+          `Premium Granted\n` +
           `User: ${newMember.user.tag} (<@${newMember.id}>) (${newMember.id})\n` +
           `Tier: ${tierInfo?.name || tier}\n` +
           `Webhook: ${webhookResult.success ? 'Success' : `${webhookResult.error}`}`
@@ -180,10 +305,10 @@ client.on('guildMemberUpdate', async (oldMember: GuildMember | PartialGuildMembe
     }
   }
 
-  // Handle role removals - only revoke if ALL premium roles are gone
+
   if (removedRoles.size > 0 && newPremiumRoles.size === 0) {
     const previousGrant = getPremiumGrant(newMember.id);
-    
+
     removePremiumGrant(newMember.id);
 
     const webhookResult = await sendPremiumWebhook('revoke', newMember.id);
@@ -197,7 +322,7 @@ client.on('guildMemberUpdate', async (oldMember: GuildMember | PartialGuildMembe
         const channel = await client.channels.fetch(config.premiumLogChannels.revoke) as TextChannel;
         const tierInfo = previousGrant ? Object.values(PREMIUM_TIERS).find(t => t.id === previousGrant.tier) : null;
         await channel.send(
-          `**Premium Revoked**\n` +
+          `Premium Revoked\n` +
           `User: ${newMember.user.tag} (${newMember.id})\n` +
           `Previous Tier: ${tierInfo?.name || previousGrant?.tier || 'Unknown'}\n` +
           `Webhook: ${webhookResult.success ? 'Success' : `${webhookResult.error}`}`
@@ -207,10 +332,10 @@ client.on('guildMemberUpdate', async (oldMember: GuildMember | PartialGuildMembe
       }
     }
   } else if (removedRoles.size > 0 && newPremiumRoles.size > 0) {
-    // Roles were removed but user still has premium roles - update tier to remaining role
+
     const remainingRole = highestTierRole([...newPremiumRoles.values()]);
     const tier = tierOfRoleId(remainingRole.id);
-    
+
     if (tier) {
       const previousGrant = getPremiumGrant(newMember.id);
       addPremiumGrant(newMember.id, tier);
@@ -246,7 +371,7 @@ client.on('guildMemberRemove', async (member: GuildMember | PartialGuildMember) 
         const tierInfo = Object.values(PREMIUM_TIERS).find(t => t.id === premiumGrant.tier);
         const userTag = member.user ? member.user.tag : 'Unknown User';
         await channel.send(
-          `**Premium Auto-Revoked (User Left)**\n` +
+          `Premium Auto-Revoked (User Left)\n` +
           `User: ${userTag} (${member.id})\n` +
           `Tier: ${tierInfo?.name || premiumGrant.tier}\n` +
           `Webhook: ${webhookResult.success ? 'Success' : `${webhookResult.error}`}`

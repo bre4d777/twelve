@@ -2,6 +2,11 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+export interface TicketCategory {
+  name: string;
+  prefix: string;
+}
+
 interface Config {
   token: string;
   prefix: string;
@@ -20,6 +25,10 @@ interface Config {
     revoke: string | null;
   };
   premiumBackupChannel: string | null;
+  tickets: {
+    categoryId: string;
+    categories: TicketCategory[];
+  };
 }
 
 function getEnvVar(key: string): string {
@@ -48,4 +57,25 @@ export const config: Config = {
     revoke: '1530218547488362526',
   },
   premiumBackupChannel: '1530218781450702961',
+  tickets: {
+    categoryId: '1530852988049166346',
+    categories: [
+      {
+        name: 'Bug Report',
+        prefix: 'bug',
+      },
+      {
+        name: 'Feedback/Suggestion',
+        prefix: 'feedback',
+      },
+      {
+        name: 'Buy Premium',
+        prefix: 'premium',
+      },
+      {
+        name: 'General Query',
+        prefix: 'general',
+      },
+    ],
+  },
 };

@@ -1,6 +1,6 @@
 import type { Message } from 'discord.js';
 import type { Command } from '../types.js';
-import { commands } from '../handler.js';
+import { commands, ownerCommands } from '../handler.js';
 import { config } from '../config.js';
 
 const command: Command = {
@@ -12,6 +12,11 @@ const command: Command = {
       .join('\n');
 
     await message.reply(`>>> ${commandList}`);
+    const ownerList = Array.from(ownerCommands.values())
+      .map(cmd => `${config.prefix}${cmd.name} - ${cmd.description}`)
+      .join('\n');
+
+    await message.reply(`>>> Owner Commands\n${ownerList}`);
   },
 };
 
